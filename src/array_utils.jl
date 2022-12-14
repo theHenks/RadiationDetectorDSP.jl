@@ -13,19 +13,6 @@ end
 _uniqueelem(A::FillArrays.Fill) = A.value
 
 
-_bcgetindex(A::AbstractArray{<:AbstractArray}, idxs...) = broadcast(getindex, A, map(Ref, idxs)...)
-
-function _bcgetindex(A::ArrayOfSimilarArrays{T,M,N}, idxs...) where {T,M,N}
-    flat_A = flatview(A)
-    flat_B = getindex(flat_A, ntuple(_ -> :, Val(M))..., idxs...)
-    #ArrayOfSimilarArrays{T,M,N + length(size(flat_B)) - length(size(flat_A))}(flat_B)
-    _bcgetindex_renest(flat_B, Val(M), Val{N + length(size(flat_B)) - length(size(flat_A))}())
-end
-
-_bcgetindex_renest(flat_B::AbstractArray{T}, ::Val{M}, ::Val{N}) where {T,M,N} = ArrayOfSimilarArrays{T,M,N}(flat_B)
-_bcgetindex_renest(flat_B::AbstractArray{T}, ::Val{M}, ::Val{0}) where {T,M} = flat_B
-
-
 function _inneraxes(A::AbstractArray{<:AbstractArray{T,M},N}) where {T,M,N}
     ax = if !isempty(A)
         axes(first(A))
@@ -66,3 +53,36 @@ function _to_same_device_as(X, Y)
     copy!(new_Y, Y)
     return new_Y
 end
+
+
+Base.@propagate_inbounds _front_tuple(x::NTuple{N,Any}, ::Val{M}) where {N,M} =
+    Base.ntuple(i -> x[i], Val{M}())
+
+@inline _kbc_view(A::AbstractArray{<:Any,N}, idxs...) where N =  view(A, _front_tuple(idxs, Val(N))...)
+
+@inline _kbc_getindex(A::AbstractArray{<:Any,N}, idxs...) where N =  getindex(A, _front_tuple(idxs, Val(N))...)
+@inline _kbc_getindex(x::Number, idxs...) =  x
+
+@inline _kbc_setindex!(A::AbstractArray{<:Any,N}, x, idxs...) where N =  setindex!(A, x, _front_tuple(idxs, Val(N))...)
+
+
+struct _Reslice{M,N} end
+(f::_Reslice{M,N})(A::AbstractArray{T}) where {M,N,T<:RealQuantity} = ArrayOfSimilarArrays{T,M,N}(A)
+
+_kbc_flatview(x::RealQuantity) = x, identity
+_kbc_flatview(ref::Ref{<:RealQuantity}) = ref[], identity
+_kbc_flatview(ref::Tuple{<:RealQuantity}) = ref[], identity
+_kbc_flatview(ref::Ref{<:AbstractArray{<:RealQuantity}}) = ref[], identity
+_kbc_flatview(ref::Tuple{<:AbstractArray{<:RealQuantity}}) = ref[], identity
+_kbc_flatview(As::ArrayOfSimilarArrays{<:RealQuantity,M,N}) where {M,N} = flatview(As), _Reslice{M,N}()
+
+_kbc_size(::Tuple{}) = (1,)
+_kbc_size(sz::Tuple) = sz
+
+_kbc_result(x) = x
+_kbc_result(x::AbstractArray{<:Any,0}) = x[]
+
+
+const _BC_RQs = Union{AbstractArray{<:RealQuantity}, Ref{<:RealQuantity}, Tuple{<:RealQuantity}, RealQuantity}
+const _BC_RQ_Arrays = Union{AbstractArray{<:AbstractArray{<:RealQuantity}}, Ref{<:AbstractArray{<:RealQuantity}}, Tuple{<:AbstractArray{<:RealQuantity}}}
+const _BC_RQ_AosAs = Union{ArrayOfSimilarArrays{<:RealQuantity}, Ref{<:AbstractArray{<:RealQuantity}}, Tuple{<:AbstractArray{<:RealQuantity}}}
