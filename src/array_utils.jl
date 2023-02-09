@@ -41,6 +41,20 @@ end
 end
 
 
+_similar_memlayout(A::AbstractArray{<:T}, ::Type{U}, sz::Dims) where {T<:Real,U<:Real} = similar(A, U, sz)
+_similar_memlayout(A::LinearAlgebra.Transpose{<:T}, ::Type{U}, sz::Dims) where {T<:Real,U<:Real} = transpose(similar(A, U, reverse(sz)))
+
+
+_lazy_transpose(A::AbstractMatrix{T}) where {T<:Number} = transpose(A)
+_nonlazy_transpose(A::AbstractMatrix{T}) where {T<:Number} = copy(_lazy_transpose(A))
+
+_row_major(A::AbstractMatrix{T}) where {T<:Number} = _lazy_transpose(_nonlazy_transpose(A))
+_row_major(A::LinearAlgebra.Transpose{T}) where {T<:Number} = A
+
+_col_major(A::AbstractMatrix{T}) where {T<:Number} = A
+_col_major(A::LinearAlgebra.Transpose{T}) where {T<:Number} = _nonlazy_transpose(_lazy_transpose(A))
+
+
 # ToDo: Replace _to_same_device_as workaround as soon as ArrayInferface
 # and Adapt have proper support for computing devices:
 
@@ -86,3 +100,17 @@ _kbc_result(x::AbstractArray{<:Any,0}) = x[]
 const _BC_RQs = Union{AbstractArray{<:RealQuantity}, Ref{<:RealQuantity}, Tuple{<:RealQuantity}, RealQuantity}
 const _BC_RQ_Arrays = Union{AbstractArray{<:AbstractArray{<:RealQuantity}}, Ref{<:AbstractArray{<:RealQuantity}}, Tuple{<:AbstractArray{<:RealQuantity}}}
 const _BC_RQ_AosAs = Union{ArrayOfSimilarArrays{<:RealQuantity}, Ref{<:AbstractArray{<:RealQuantity}}, Tuple{<:AbstractArray{<:RealQuantity}}}
+
+
+"""
+    RadiationDetectorDSP.CPUAdaptor
+
+To be used with `Adapt.adapt`.
+
+`Adapt.adapt(RadiationDetectorDSP.CPUAdaptor, x)` adapts `x` to reside on
+the CPU and tries to ensure that arrays are stored in column-major order.
+"""
+struct CPUAdaptor end
+
+Adapt.adapt_storage(::CPUAdaptor, A::AbstractArray) = adapt(Array, A)
+Adapt.adapt_structure(to::CPUAdaptor, A::LinearAlgebra.Transpose{<:Number}) = adapt(to, _nonlazy_transpose(transpose(A)))
