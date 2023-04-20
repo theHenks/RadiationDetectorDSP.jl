@@ -187,19 +187,19 @@ end
 """
     RadiationDetectorDSP::adapt_memlayout(
         fi::AbstractRadSigFilterInstance,
-        dev::KernelAbstractions.Device,
+        backend::KernelAbstractions.Backend,
         A::AbstractArray{<:Number}
     )
 
 Adapts the memory layout of `A` in a suitable fashion for `fi` on computing
-device `dev`.
+device `backend`.
 
-Returns a row-major version of `A` on all devices by default, filter instance
+Returns a row-major version of `A` on all backends by default, filter instance
 types may specialize this behavior.
 """
 function adapt_memlayout end
 
-adapt_memlayout(::AbstractRadSigFilterInstance, ::KernelAbstractions.Device, A::AbstractArray{<:Number}) = _col_major(A)
+adapt_memlayout(::AbstractRadSigFilterInstance, ::_KA_Backend, A::AbstractArray{<:Number}) = _col_major(A)
 
 
 """
@@ -224,8 +224,8 @@ function bc_rdfilt(
     T_out = flt_output_smpltype(fi)
     n_out = flt_output_length(fi)
     flat_inputs = flatview(inputs)
-    dev = KernelAbstractions.get_device(flat_inputs)
-    new_flat_inputs = adapt_memlayout(fi, dev, flat_inputs)
+    backend = _ka_get_backend(flat_inputs)
+    new_flat_inputs = adapt_memlayout(fi, backend, flat_inputs)
     flat_output = _similar_memlayout(new_flat_inputs, T_out, (n_out, size(inputs)...))
     new_inputs = ArrayOfSimilarArrays{T_in,M,N}(new_flat_inputs)
     outputs = ArrayOfSimilarArrays{T_out,M,N}(flat_output)
@@ -269,29 +269,30 @@ end
 
 
 @kernel function _ka_filter_kernel!(
-    Y::AbstractArray{<:RealQuantity,N}, @Const(X::AbstractArray{<:RealQuantity,N}),
-    fi::AbstractRadSigFilterInstance
-) where N
+    outputs::ArrayOfSimilarArrays{<:RealQuantity,M,N}, @Const(inputs::ArrayOfSimilarArrays{<:RealQuantity,M,N}),
+    @Const(fi::AbstractRadSigFilterInstance)
+) where {N,M}
     idxs = @index(Global, NTuple)
-    rdfilt!(view(Y, :, idxs...), fi, view(X, :, idxs...))
+    rdfilt!(outputs[idxs...], fi, inputs[idxs...])
 end
 
 _ka_threads(::KernelAbstractions.CPU) = (Base.Threads.nthreads(),)
-_ka_threads(::KernelAbstractions.Device) = ()
+_ka_threads(::_KA_Backend) = ()
 
 function _ka_bc_rdfilt!(
     outputs::ArrayOfSimilarVectors{<:RealQuantity},
     fi::AbstractRadSigFilterInstance,
     inputs::ArrayOfSimilarVectors{<:RealQuantity}
 )
-    X = flatview(inputs)
-    Y = flatview(outputs)
-    @argcheck Base.tail(axes(X)) == Base.tail(axes(Y))
+    @argcheck axes(inputs) == axes(outputs)
 
-    dev = KernelAbstractions.get_device(Y)
-    kernel! = _ka_filter_kernel!(dev, _ka_threads(dev)...)
-    evt = kernel!(Y, X, fi, ndrange=Base.tail(size(Y))) 
-    wait(evt)
+    adaptor = device_adaptor(deviceof(inputs))
+    adapted_fi = adapt(adaptor, fi)
+    
+    backend = _ka_get_backend(flatview(outputs))
+    kernel! = _ka_filter_kernel!(backend, _ka_threads(backend)...)
+    kernel_ret = kernel!(outputs, inputs, adapted_fi, ndrange=size(inputs))
+    _ka_synchronize(kernel!, kernel_ret)
     return outputs
 end
 

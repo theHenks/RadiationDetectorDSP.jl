@@ -101,6 +101,8 @@ struct DirectConvFilterInstance{T<:Real,TV<:AbstractVector{T}} <: AbstractConvFi
     offset::Int
 end
 
+Adapt.adapt_structure(to, fi::DirectConvFilterInstance) = DirectConvFilterInstance(adapt(to, fi.reverse_h), fi.n_input, fi.offset)
+
 _filterlen(fi::DirectConvFilterInstance) = size(fi.reverse_h, 1)
 
 @inline function rdfilt!(y::AbstractVector{T}, fi::DirectConvFilterInstance{T}, x::AbstractVector{T}) where {T<:Real}
@@ -118,30 +120,12 @@ _filterlen(fi::DirectConvFilterInstance) = size(fi.reverse_h, 1)
     return y
 end
 
-
-@kernel function _direct_conv_kernel!(
-    Y::AbstractArray{<:RealQuantity,N}, @Const(X::AbstractArray{<:RealQuantity,N}),
-    @Const(reverse_h::AbstractArray{<:RealQuantity},N), n_input::Int, offset::Int
-) where N
-    idxs = @index(Global, NTuple)
-    fi = DirectConvFilterInstance(reverse_h, n_input, offset)
-    rdfilt!(view(Y, :, idxs...), fi, view(X, :, idxs...))
-end
-
 function bc_rdfilt!(
-    outputs::AbstractVector{<:AbstractSamples},
+    outputs::ArrayOfSimilarVectors{<:RealQuantity},
     fi::DirectConvFilterInstance,
-    inputs::AbstractVector{<:AbstractSamples}
+    inputs::ArrayOfSimilarVectors{<:RealQuantity}
 )
-    X = flatview(inputs)
-    Y = flatview(outputs)
-    @argcheck Base.tail(axes(X)) == Base.tail(axes(Y))
-
-    dev = KernelAbstractions.get_device(Y)
-    kernel! = _direct_conv_kernel!(dev, _ka_threads(dev)...)
-    evt = kernel!(Y, X, fi.reverse_h, fi.n_input, fi.offset, ndrange=Base.tail(size(Y))) 
-    wait(evt)
-    return outputs
+    _ka_bc_rdfilt!(outputs, fi, inputs)
 end
 
 
@@ -150,6 +134,8 @@ struct FFTConvFilterInstance{T<:Real,TV<:AbstractVector{Complex{T}}} <: Abstract
     n_filter::Int
     offset::Int
 end
+
+Adapt.adapt_structure(to, fi::FFTConvFilterInstance) = FFTConvFilterInstance(adapt(to, fi.rfft_h), fi.n_filter, fi.offset)
 
 _filterlen(fi::FFTConvFilterInstance) = fi.n_filter
 
@@ -177,10 +163,12 @@ function bc_rdfilt(
     inputs::ArrayOfSimilarArrays{<:Real,1,N}
 ) where N
     T_out = flt_output_smpltype(fi)
+    adaptor = device_adaptor(deviceof(inputs))
+    adapted_fi = adapt(adaptor, fi)
     X = flatview(inputs)
-    rfft_h = _to_same_device_as(X, fi.rfft_h) # ToDo: Try to avoid this, significant overhead on GPU
+    rfft_h = adapted_fi.rfft_h
     Y = irfft(rfft(X, 1) .* rfft_h, size(X, 1), 1)
-    valid_range = (first(axes(Y, 1)) + fi.n_filter - 1):last(axes(Y, 1))
+    valid_range = (first(axes(Y, 1)) + adapted_fi.n_filter - 1):last(axes(Y, 1))
     flat_output = Y[valid_range, :]
     ArrayOfSimilarArrays{T_out,1,N}(flat_output)
 end

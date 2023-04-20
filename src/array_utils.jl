@@ -55,20 +55,6 @@ _col_major(A::AbstractMatrix{T}) where {T<:Number} = A
 _col_major(A::LinearAlgebra.Transpose{T}) where {T<:Number} = _nonlazy_transpose(_lazy_transpose(A))
 
 
-# ToDo: Replace _to_same_device_as workaround as soon as ArrayInferface
-# and Adapt have proper support for computing devices:
-
-_to_same_device_as(::T, Y::T) where T = Y
-_to_same_device_as(::Array, Y::Array) = Y
-_to_same_device_as(::Array, Y::SubArray{Float32,1,<:Array}) = Y
-
-function _to_same_device_as(X, Y)
-    new_Y = similar(X, eltype(Y), size(Y))
-    copy!(new_Y, Y)
-    return new_Y
-end
-
-
 Base.@propagate_inbounds _front_tuple(x::NTuple{N,Any}, ::Val{M}) where {N,M} =
     Base.ntuple(i -> x[i], Val{M}())
 
@@ -103,14 +89,14 @@ const _BC_RQ_AosAs = Union{ArrayOfSimilarArrays{<:RealQuantity}, Ref{<:AbstractA
 
 
 """
-    RadiationDetectorDSP.CPUAdaptor
+    RadiationDetectorDSP.CPUNormAdaptor
 
 To be used with `Adapt.adapt`.
 
-`Adapt.adapt(RadiationDetectorDSP.CPUAdaptor, x)` adapts `x` to reside on
+`Adapt.adapt(RadiationDetectorDSP.CPUNormAdaptor, x)` adapts `x` to reside on
 the CPU and tries to ensure that arrays are stored in column-major order.
 """
-struct CPUAdaptor end
+struct CPUNormAdaptor end
 
-Adapt.adapt_storage(::CPUAdaptor, A::AbstractArray) = adapt(Array, A)
-Adapt.adapt_structure(to::CPUAdaptor, A::LinearAlgebra.Transpose{<:Number}) = adapt(to, _nonlazy_transpose(transpose(A)))
+Adapt.adapt_storage(::CPUNormAdaptor, A::AbstractArray) = adapt(Array, A)
+Adapt.adapt_structure(to::CPUNormAdaptor, A::LinearAlgebra.Transpose{<:Number}) = adapt(to, _nonlazy_transpose(transpose(A)))
